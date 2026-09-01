@@ -124,6 +124,18 @@ export PI_SUBAGENT_HERDR_MODE=tab
 # or: split
 ```
 
+If you use the modified interactive subagents behavior from this setup, add these exports to your `~/.zshrc` or `~/.bashrc`:
+
+```bash
+# pi-env
+export PI_SUBAGENT_NUDGE_DISABLE=1
+export PI_SUBAGENT_NUDGE_DELAY_MS=28800000
+export PI_EXTENSIONS_LOCALE=en-US
+# /pi-env
+```
+
+After changing your shell config, open a new shell or run `source ~/.zshrc` / `source ~/.bashrc` before starting Pi.
+
 Make sure `gh` is installed and authenticated before running the workflow agents:
 
 ```bash
