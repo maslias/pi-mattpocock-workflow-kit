@@ -132,6 +132,113 @@ gh auth status
 
 The dashboard extension may warn about these prerequisites, but it does not install them.
 
+## Usage
+
+This package provides two layers:
+
+1. **Skills** describe the workflow instructions.
+2. **Agents** run those skills in fresh subagent sessions with the right role, tools, and naming conventions.
+
+In normal use, prefer the agents. They give the workflow a fresh context and let the interactive subagents extension manage panes, progress, and completion messages.
+
+### Full SPEC-to-PR orchestration
+
+Use `to-pr-orchestrator` when you want to take one completed Wayfinder map or one existing SPEC issue all the way to a pull request.
+
+It coordinates the whole workflow:
+
+1. validate the input issue
+2. create a SPEC from a completed Wayfinder map, if needed
+3. create implementation tickets
+4. create the implementation branch
+5. run the implementation dispatcher
+6. run the final code-review dispatcher
+7. push the branch
+8. open the PR
+9. comment on and close the SPEC
+
+Example prompt:
+
+```text
+Run to-pr-orchestrator for #123.
+```
+
+Or, if you are calling the subagent tool directly:
+
+```text
+Spawn agent `to-pr-orchestrator` for issue #123.
+```
+
+### Implementation dispatcher
+
+Use `implement-dispatcher` when you already have a SPEC issue with implementation tickets and you want the ready tickets implemented.
+
+It does not implement code itself. It:
+
+- finds takeable SPEC child tickets
+- creates isolated git worktrees and branches
+- spawns `implement-worker` agents
+- merges successful worker branches back into the current implementation branch
+- reports open/closed/running/blocked/failed counts
+
+It does **not** run final code review and does **not** close the SPEC.
+
+Example prompt:
+
+```text
+Run implement-dispatcher for SPEC #123.
+```
+
+### Code-review dispatcher
+
+Use `code-review-dispatcher` after implementation tickets are closed and you want a final review/fix loop.
+
+It:
+
+- verifies all SPEC child issues are closed
+- spawns `code-review-worker` for one review iteration
+- sends relevant findings to `code-review-fix-worker`
+- repeats until the final review is clean
+- either closes the SPEC or leaves closure to the outer orchestrator, depending on the prompt
+
+Example prompt:
+
+```text
+Run code-review-dispatcher for SPEC #123 against origin/main.
+```
+
+When used inside `to-pr-orchestrator`, it is instructed not to close the SPEC because the orchestrator owns final PR/SPEC closure.
+
+### Wayfinder dispatcher
+
+Use `wayfinder-dispatcher` when you have a Wayfinder map issue with child Wayfinder tickets.
+
+It:
+
+- classifies Wayfinder child tickets
+- spawns AFK workers for research/task tickets
+- spawns interactive workers for prototype/grilling tickets
+- reloads the map after workers finish because they may create more tickets
+- stops when no takeable ticket remains and no worker is running
+
+Example prompt:
+
+```text
+Run wayfinder-dispatcher for map #123.
+```
+
+### Worker agents
+
+Worker agents are normally spawned by dispatchers, not by humans directly:
+
+- `implement-worker` implements one SPEC sub-issue in one worktree.
+- `code-review-worker` performs one review pass and creates a handoff if fixes are needed.
+- `code-review-fix-worker` fixes one review handoff and commits when checks pass.
+- `wayfinder-worker` handles one AFK Wayfinder ticket.
+- `wayfinder-worker-interactive` handles one human-in-the-loop Wayfinder ticket.
+- `to-spec-agent` creates a SPEC from a completed Wayfinder map.
+- `to-tickets-agent` creates implementation tickets from one SPEC.
+
 ## Configure dashboard placement
 
 Default placement is above the editor.
