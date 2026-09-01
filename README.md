@@ -141,32 +141,22 @@ This package provides two layers:
 
 In normal use, prefer the agents. They give the workflow a fresh context and let the interactive subagents extension manage panes, progress, and completion messages.
 
-### Full SPEC-to-PR orchestration
+### Wayfinder dispatcher
 
-Use `to-pr-orchestrator` when you want to take one completed Wayfinder map or one existing SPEC issue all the way to a pull request.
+Use `wayfinder-dispatcher` when you have a Wayfinder map issue with child Wayfinder tickets.
 
-It coordinates the whole workflow:
+It:
 
-1. validate the input issue
-2. create a SPEC from a completed Wayfinder map, if needed
-3. create implementation tickets
-4. create the implementation branch
-5. run the implementation dispatcher
-6. run the final code-review dispatcher
-7. push the branch
-8. open the PR
-9. comment on and close the SPEC
+- classifies Wayfinder child tickets
+- spawns AFK workers for research/task tickets
+- spawns interactive workers for prototype/grilling tickets
+- reloads the map after workers finish because they may create more tickets
+- stops when no takeable ticket remains and no worker is running
 
 Example prompt:
 
 ```text
-Run to-pr-orchestrator for #123.
-```
-
-Or, if you are calling the subagent tool directly:
-
-```text
-Spawn agent `to-pr-orchestrator` for issue #123.
+Run wayfinder-dispatcher for map #123.
 ```
 
 ### Implementation dispatcher
@@ -209,22 +199,37 @@ Run code-review-dispatcher for SPEC #123 against origin/main.
 
 When used inside `to-pr-orchestrator`, it is instructed not to close the SPEC because the orchestrator owns final PR/SPEC closure.
 
-### Wayfinder dispatcher
+### Full SPEC-to-PR orchestration
 
-Use `wayfinder-dispatcher` when you have a Wayfinder map issue with child Wayfinder tickets.
+Use `to-pr-orchestrator` when you already have one of these inputs:
 
-It:
+- a completed Wayfinder map issue, or
+- an existing SPEC issue.
 
-- classifies Wayfinder child tickets
-- spawns AFK workers for research/task tickets
-- spawns interactive workers for prototype/grilling tickets
-- reloads the map after workers finish because they may create more tickets
-- stops when no takeable ticket remains and no worker is running
+The orchestrator does not start from a blank idea. It needs an existing Wayfinder map or SPEC to coordinate.
+
+It coordinates the whole workflow:
+
+1. validate the input issue
+2. create a SPEC from a completed Wayfinder map, if needed
+3. create implementation tickets
+4. create the implementation branch
+5. run the implementation dispatcher
+6. run the final code-review dispatcher
+7. push the branch
+8. open the PR
+9. comment on and close the SPEC
 
 Example prompt:
 
 ```text
-Run wayfinder-dispatcher for map #123.
+Run to-pr-orchestrator for #123.
+```
+
+Or, if you are calling the subagent tool directly:
+
+```text
+Spawn agent `to-pr-orchestrator` for issue #123.
 ```
 
 ### Worker agents
