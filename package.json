@@ -1,0 +1,26 @@
+{
+  "name": "pi-mattpocock-workflow-kit",
+  "version": "0.1.0",
+  "description": "Pi workflow dashboard, agents, and dispatcher skills for Matt Pocock-style SPEC-to-PR workflows.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "workflow",
+    "agents",
+    "skills"
+  ],
+  "license": "MIT",
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}
