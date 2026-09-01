@@ -31,13 +31,13 @@ Status is persisted in the current project at:
 From a published GitHub repo:
 
 ```bash
-pi install https://github.com/<owner>/pi-mattpocock-workflow-kit
+pi install https://github.com/maslias/pi-mattpocock-workflow-kit
 ```
 
 For project-local installation, use:
 
 ```bash
-pi install -l https://github.com/<owner>/pi-mattpocock-workflow-kit
+pi install -l https://github.com/maslias/pi-mattpocock-workflow-kit
 ```
 
 For local development from this checkout:
