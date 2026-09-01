@@ -124,12 +124,12 @@ export PI_SUBAGENT_HERDR_MODE=tab
 # or: split
 ```
 
-If you use the modified interactive subagents behavior from this setup, add these exports to your `~/.zshrc` or `~/.bashrc`:
+If you use the modified interactive subagents behavior from this setup, do **not** globally disable or delay subagent nudges. Autonomous workers need the default quick nudge so forgotten `subagent_done` calls are caught; long-running human-in-the-loop workers should instead be marked interactive (`interactive: true` in the agent frontmatter or subagent call).
+
+Keep only locale/config exports such as:
 
 ```bash
 # pi-env
-export PI_SUBAGENT_NUDGE_DISABLE=1
-export PI_SUBAGENT_NUDGE_DELAY_MS=28800000
 export PI_EXTENSIONS_LOCALE=en-US
 # /pi-env
 ```
