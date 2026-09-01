@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CONFIG_DIR_NAME, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 type RunKind = "2pr" | "wayfinder" | "implement" | "code-review" | "unknown";
 type RunStatus = "running" | "completed" | "blocked" | "failed" | "unknown";
@@ -215,42 +215,85 @@ function updateWarnings(ctx: ExtensionContext): void {
 	state.warnings = warnings;
 }
 
-function configuredPlacement(ctx: ExtensionContext): "belowEditor" | undefined {
+function configuredPlacement(ctx: ExtensionContext): "aboveEditor" | "belowEditor" | undefined {
 	try {
 		const configPath = path.join(ctx.cwd, CONFIG_DIR_NAME, "mattpocock-workflow", "config.json");
 		const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as { placement?: string };
-		return config.placement === "belowEditor" ? "belowEditor" : undefined;
+		if (config.placement === "aboveEditor" || config.placement === "belowEditor") return config.placement;
+		return undefined;
 	} catch {
 		return undefined;
 	}
 }
 
+function isDashboardActive(): boolean {
+	return state.runs.length > 0;
+}
+
+function borderTop(title: string, info: string, width: number, accent: (value: string) => string): string {
+	if (width <= 0) return "";
+	if (width === 1) return accent("╭");
+	const inner = Math.max(0, width - 2);
+	const titlePart = `─ ${title} `;
+	const infoPart = info ? ` ${info} ─` : "─";
+	const fillLen = Math.max(0, inner - visibleWidth(titlePart) - visibleWidth(infoPart));
+	const content = truncateToWidth(`${titlePart}${"─".repeat(fillLen)}${infoPart}`, inner, "").padEnd(inner, "─");
+	return accent(`╭${content}╮`);
+}
+
+function borderLine(left: string, right: string, width: number, accent: (value: string) => string): string {
+	if (width <= 0) return "";
+	if (width === 1) return accent("│");
+	const contentWidth = Math.max(0, width - 2);
+	const rightWidth = visibleWidth(right);
+	if (rightWidth >= contentWidth) return `${accent("│")}${truncateToWidth(right, contentWidth)}${accent("│")}`;
+	const truncatedLeft = truncateToWidth(left, Math.max(0, contentWidth - rightWidth));
+	const padding = Math.max(0, contentWidth - visibleWidth(truncatedLeft) - rightWidth);
+	return `${accent("│")}${truncatedLeft}${" ".repeat(padding)}${right}${accent("│")}`;
+}
+
+function borderBottom(width: number, accent: (value: string) => string): string {
+	if (width <= 0) return "";
+	if (width === 1) return accent("╰");
+	return accent(`╰${"─".repeat(Math.max(0, width - 2))}╯`);
+}
+
 function renderDashboard(ctx: ExtensionContext): void {
 	if (!ctx.hasUI) return;
-	const placement = configuredPlacement(ctx);
+	if (!isDashboardActive()) {
+		ctx.ui.setWidget(EXTENSION_ID, undefined);
+		ctx.ui.setStatus(EXTENSION_ID, undefined);
+		return;
+	}
+
+	const placement = configuredPlacement(ctx) ?? "aboveEditor";
 	ctx.ui.setWidget(EXTENSION_ID, (_tui, theme) => ({
 		invalidate() {},
 		render(width: number): string[] {
-			const lines: string[] = [];
-			lines.push(theme.fg("accent", "Matt Pocock Workflow"));
-			if (state.runs.length === 0) {
-				lines.push(theme.fg("dim", "No workflow status detected yet."));
-			} else {
-				for (const run of state.runs.slice(0, 4)) {
-					const icon = run.status === "failed" ? theme.fg("error", "✗") : run.status === "completed" ? theme.fg("success", "✓") : theme.fg("accent", "●");
-					const phase = run.phase ? ` — ${run.phase}` : "";
-					lines.push(`${icon} ${run.scope}${phase}: ${run.summary}`);
-					for (const event of run.events.slice(0, MAX_EVENTS)) lines.push(theme.fg("dim", `  · ${event}`));
-				}
+			const accent = (value: string) => theme.fg("accent", value);
+			const title = "Matt Pocock Workflow";
+			const active = state.runs[0];
+			const info = active ? `${active.phase ?? active.kind} · ${active.scope}` : "";
+			const lines: string[] = [borderTop(title, info, width, accent)];
+
+			for (const run of state.runs.slice(0, 4)) {
+				const icon = run.status === "failed" ? theme.fg("error", "✗") : run.status === "completed" ? theme.fg("success", "✓") : theme.fg("accent", "●");
+				const phase = run.phase ? ` · ${run.phase}` : "";
+				const left = ` ${icon} ${run.scope}${phase} `;
+				const right = theme.fg("dim", ` ${run.status} `);
+				lines.push(borderLine(left, right, width, accent));
+				for (const event of run.events.slice(0, MAX_EVENTS)) lines.push(borderLine(theme.fg("dim", `   · ${event} `), "", width, accent));
 			}
-			for (const warning of state.warnings.slice(0, 2)) lines.push(theme.fg("warning", `! ${warning}`));
+
+			for (const warning of state.warnings.slice(0, 2)) lines.push(borderLine(theme.fg("warning", ` ! ${warning} `), "", width, accent));
+			lines.push(borderBottom(width, accent));
 			return lines.map((line) => truncateToWidth(line, width));
 		},
-	}), placement ? { placement } : undefined);
+	}), { placement });
 
 	const active = state.runs[0];
-	const status = active ? `2PR: ${active.phase ?? active.kind} — ${active.scope}` : "Workflow dashboard ready";
-	ctx.ui.setStatus(EXTENSION_ID, ctx.ui.theme.fg("accent", status));
+	const status = active ? `2PR: ${active.phase ?? active.kind} — ${active.scope}` : undefined;
+	ctx.ui.setStatus(EXTENSION_ID, status ? ctx.ui.theme.fg("accent", status) : undefined);
 }
 
 export default function mattpocockWorkflowDashboard(pi: ExtensionAPI): void {

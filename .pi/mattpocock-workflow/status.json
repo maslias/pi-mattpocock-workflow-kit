@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "updatedAt": "2026-09-01T10:35:00.204Z",
+  "runs": [],
+  "warnings": [
+    "External prerequisites: Matt Pocock skills, maplezzk/pi-interactive-subagents, GitHub CLI auth, and a supported mux/terminal."
+  ]
+}
