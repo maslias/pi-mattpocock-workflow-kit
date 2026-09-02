@@ -12,6 +12,9 @@ interface WorkflowRun {
 	scope: string;
 	status: RunStatus;
 	phase?: string;
+	title?: string;
+	alert?: string;
+	startedAt?: string;
 	summary: string;
 	counts: Record<string, number | string>;
 	events: string[];
@@ -25,8 +28,16 @@ interface DashboardState {
 	warnings: string[];
 }
 
+interface DashboardConfig {
+	placement?: string;
+	enabled?: boolean;
+}
+
 const EXTENSION_ID = "mattpocock-workflow-dashboard";
-const MAX_EVENTS = 5;
+const INFO_TEXT_FG = "\x1b[38;2;255;255;255m";
+const RESET_FG = "\x1b[39m";
+const MAX_EVENTS = 3;
+const WORKFLOW_ENTRYPOINT_NAMES = new Set(["wayfinder-dispatcher", "implement-dispatcher", "code-review-dispatcher", "to-pr-orchestrator"]);
 const REQUIRED_AGENTS = [
 	"code-review-dispatcher",
 	"code-review-fix-worker",
@@ -49,13 +60,28 @@ const INITIAL_STATE: DashboardState = {
 };
 
 let state: DashboardState = structuredClone(INITIAL_STATE);
+let visibleThisSession = false;
+let workflowActiveThisSession = false;
+let activeRunIdsThisSession = new Set<string>();
+let dashboardTimer: ReturnType<typeof setInterval> | undefined;
+let dashboardWidgetMounted = false;
+let dashboardWidgetPlacement: "aboveEditor" | "belowEditor" | undefined;
+let requestDashboardRender: (() => void) | undefined;
 
 function now(): string {
 	return new Date().toISOString();
 }
 
+function workflowDir(ctx: ExtensionContext): string {
+	return path.join(ctx.cwd, CONFIG_DIR_NAME, "mattpocock-workflow");
+}
+
 function statusFile(ctx: ExtensionContext): string {
-	return path.join(ctx.cwd, CONFIG_DIR_NAME, "mattpocock-workflow", "status.json");
+	return path.join(workflowDir(ctx), "status.json");
+}
+
+function configFile(ctx: ExtensionContext): string {
+	return path.join(workflowDir(ctx), "config.json");
 }
 
 async function loadState(ctx: ExtensionContext): Promise<void> {
@@ -78,16 +104,45 @@ async function persistState(ctx: ExtensionContext): Promise<void> {
 function findRun(id: string, kind: RunKind, scope: string): WorkflowRun {
 	let run = state.runs.find((r) => r.id === id);
 	if (!run) {
-		run = { id, kind, scope, status: "running", summary: "Starting", counts: {}, events: [], updatedAt: now() };
+		run = { id, kind, scope, status: "running", startedAt: now(), summary: "Starting", counts: {}, events: [], updatedAt: now() };
 		state.runs.unshift(run);
+	}
+	if (!activeRunIdsThisSession.has(id)) {
+		run.startedAt = now();
+		activeRunIdsThisSession.add(id);
 	}
 	return run;
 }
 
 function addEvent(run: WorkflowRun, event: string): void {
-	run.events.unshift(event);
-	run.events = run.events.slice(0, MAX_EVENTS);
+	run.events = [event, ...run.events.filter((existing) => existing !== event)].slice(0, MAX_EVENTS);
 	run.updatedAt = now();
+}
+
+function markDashboardVisible(): void {
+	visibleThisSession = true;
+}
+
+function hasWorkflowEntrypointName(value: unknown): boolean {
+	if (typeof value !== "string") return false;
+	return WORKFLOW_ENTRYPOINT_NAMES.has(value) || [...WORKFLOW_ENTRYPOINT_NAMES].some((name) => value.includes(name));
+}
+
+function workflowSkillIsActive(event: any): boolean {
+	const prompt = typeof event?.prompt === "string" ? event.prompt : "";
+	if (!prompt) return false;
+	return [...WORKFLOW_ENTRYPOINT_NAMES].some((name) => prompt.includes(`/skill:${name}`) || prompt.includes(`<skill name="${name}"`) || prompt.includes(`<skill name='${name}'`));
+}
+
+function workflowAgentIsStarting(event: any): boolean {
+	if (event?.toolName !== "subagent") return false;
+	return hasWorkflowEntrypointName(event?.input?.agent) || hasWorkflowEntrypointName(event?.input?.name);
+}
+
+function deactivateWorkflowDashboard(ctx: ExtensionContext): void {
+	workflowActiveThisSession = false;
+	visibleThisSession = false;
+	clearDashboard(ctx);
 }
 
 function parseCountLine(line: string): { id: string; kind: RunKind; scope: string; summary: string; counts: Record<string, number | string> } | null {
@@ -130,12 +185,12 @@ function parseCountLine(line: string): { id: string; kind: RunKind; scope: strin
 	return null;
 }
 
-function parsePhaseLine(line: string): { id: string; phase: string; scope: string; summary: string } | null {
+function parsePhaseLine(line: string): { id: string; phase: string; scope: string; summary: string; title?: string } | null {
 	let match = line.match(/^MAP #(\d+): all (\d+)\/(\d+) child issues closed; creating SPEC\.?$/);
-	if (match) return { id: `2pr-map-${match[1]}`, phase: "spec", scope: `MAP #${match[1]}`, summary: line };
+	if (match) return { id: `2pr-map-${match[1]}`, phase: "spec", scope: `MAP #${match[1]}`, summary: line, title: state.runs.find((run) => run.scope === `MAP #${match[1]}`)?.title };
 
 	match = line.match(/^SPEC #(\d+): (.+) — ready for ticket creation\.?$/);
-	if (match) return { id: `2pr-spec-${match[1]}`, phase: "tickets", scope: `SPEC #${match[1]}`, summary: line };
+	if (match) return { id: `2pr-spec-${match[1]}`, phase: "tickets", scope: `SPEC #${match[1]}`, summary: line, title: match[2] };
 
 	match = line.match(/^BRANCH: (.+) created from (.+)\.?$/);
 	if (match) return { id: `2pr-branch-${match[1]}`, phase: "branch", scope: match[1], summary: line };
@@ -143,20 +198,146 @@ function parsePhaseLine(line: string): { id: string; phase: string; scope: strin
 	return null;
 }
 
+function parseTitleLine(line: string): { issue: string; title: string } | null {
+	const match = line.match(/^Final snapshot — #(\d+) [“"](.+)[”"]$/);
+	if (!match) return null;
+	return { issue: match[1], title: match[2] };
+}
+
+function parseAlertLine(line: string): string | null {
+	if (/^No takeable child tickets remain/i.test(line)) return line;
+	if (/manual gate/i.test(line)) return line;
+	if (/\b(blocked|blocking|failed|failure|error|cannot|can't|unable|stopped|dirty working tree)\b/i.test(line)) return line;
+	if (/human|interactive|decision required|needs decision|waiting for user/i.test(line)) return line;
+	return null;
+}
+
+function normalizeWorkflowEventLine(label: string, ticket: string, rest: string): string {
+	const prefixes: Record<string, string> = {
+		"Newly discovered": "discovered",
+		"Newly unblocked/takeable": "takeable",
+		"Newly spawned": "spawned",
+		"Newly done": "done",
+		"New failure": "failed",
+	};
+	const prefix = prefixes[label] ?? label.toLowerCase();
+	return `${prefix}: #${ticket} ${rest}`;
+}
+
+function parseWorkflowEventLine(line: string, currentListLabel?: string): { id: string; event: string } | null {
+	let match = line.match(/^(Newly discovered|Newly unblocked\/takeable|Newly spawned|Newly done|New failure): #(\d+)\s+(.+)$/);
+	if (match) return { id: "latest", event: normalizeWorkflowEventLine(match[1], match[2], match[3]) };
+
+	if (currentListLabel) {
+		match = line.match(/^- #(\d+)\s+(.+)$/);
+		if (match) return { id: "latest", event: normalizeWorkflowEventLine(currentListLabel, match[1], match[2]) };
+	}
+
+	return null;
+}
+
+function workflowEventListLabel(line: string): string | undefined {
+	const match = line.match(/^(Newly discovered|Newly unblocked\/takeable|Newly spawned|Newly done|New failure):$/);
+	return match?.[1];
+}
+
+function isWorkflowNoiseLine(line: string, currentListLabel?: string): boolean {
+	return parseCountLine(line) !== null || parsePhaseLine(line) !== null || parseTitleLine(line) !== null || parseWorkflowEventLine(line, currentListLabel) !== null || workflowEventListLabel(line) !== undefined || /^Spawning takeable tickets:?$/.test(line) || /^Waiting for (harness-delivered )?worker results\.?$/.test(line);
+}
+
+function sanitizeWorkflowText(text: string): string {
+	let currentListLabel: string | undefined;
+	const kept: string[] = [];
+	for (const rawLine of text.split("\n")) {
+		const line = rawLine.trim();
+		const nextListLabel = workflowEventListLabel(line);
+		if (nextListLabel) {
+			currentListLabel = nextListLabel;
+			continue;
+		}
+		if (isWorkflowNoiseLine(line, currentListLabel)) continue;
+		if (line && !line.startsWith("- #")) currentListLabel = undefined;
+		kept.push(rawLine);
+	}
+	return kept.join("\n").trim();
+}
+
+function withTextContentShape(message: any, text: string): any {
+	if (typeof message?.content === "string") return { ...message, content: text };
+	if (!Array.isArray(message?.content)) return message;
+
+	const content: any[] = [];
+	let wroteText = false;
+	for (const part of message.content) {
+		if (part?.type !== "text") {
+			content.push(part);
+			continue;
+		}
+		if (!wroteText && text) content.push({ ...part, text });
+		wroteText = true;
+	}
+	return { ...message, content };
+}
+
 function ingestText(text: string): boolean {
 	let changed = false;
+	let currentListLabel: string | undefined;
+	let inCreatedTickets = false;
 	for (const rawLine of text.split("\n")) {
 		const line = rawLine.trim();
 		if (!line) continue;
+
+		if (line === "created_tickets:") {
+			inCreatedTickets = true;
+			continue;
+		}
+		if (inCreatedTickets && line.startsWith("- #")) {
+			const run = state.runs[0];
+			if (run?.phase === "tickets") {
+				run.counts.tickets = Number(run.counts.tickets ?? 0) + 1;
+				run.updatedAt = now();
+				changed = true;
+			}
+			continue;
+		}
+		if (inCreatedTickets && !line.startsWith("- #")) inCreatedTickets = false;
+
+		const nextListLabel = workflowEventListLabel(line);
+		if (nextListLabel) {
+			currentListLabel = nextListLabel;
+			continue;
+		}
+
+		const title = parseTitleLine(line);
+		if (title) {
+			const run = state.runs.find((candidate) => candidate.scope.endsWith(`#${title.issue}`));
+			if (run) {
+				run.title = title.title;
+				run.updatedAt = now();
+				changed = true;
+			}
+			continue;
+		}
 
 		const count = parseCountLine(line);
 		if (count) {
 			const run = findRun(count.id, count.kind, count.scope);
 			run.summary = count.summary;
 			run.counts = count.counts;
-			run.status = Number(count.counts.failed ?? 0) > 0 ? "failed" : Number(count.counts.running ?? 0) > 0 ? "running" : "unknown";
-			addEvent(run, line);
+			run.alert = undefined;
+			run.status = Number(count.counts.failed ?? 0) > 0 ? "failed" : Number(count.counts.closed ?? 0) === Number(count.counts.total ?? -1) ? "completed" : "running";
 			changed = true;
+			continue;
+		}
+
+		const alert = parseAlertLine(line);
+		if (alert) {
+			const run = state.runs[0];
+			if (run) {
+				run.alert = alert;
+				run.updatedAt = now();
+				changed = true;
+			}
 			continue;
 		}
 
@@ -164,10 +345,21 @@ function ingestText(text: string): boolean {
 		if (phase) {
 			const run = findRun(phase.id, "2pr", phase.scope);
 			run.phase = phase.phase;
+			if (phase.title) run.title = phase.title;
 			run.summary = phase.summary;
 			run.status = "running";
 			addEvent(run, line);
 			changed = true;
+			continue;
+		}
+
+		const workflowEvent = parseWorkflowEventLine(line, currentListLabel);
+		if (workflowEvent) {
+			const run = state.runs[0];
+			if (run) {
+				addEvent(run, workflowEvent.event);
+				changed = true;
+			}
 			continue;
 		}
 
@@ -211,23 +403,119 @@ function updateWarnings(ctx: ExtensionContext): void {
 	const warnings: string[] = [];
 	const missingAgents = missingAgentNames(ctx);
 	if (missingAgents.length > 0) warnings.push(`Missing agents: ${missingAgents.join(", ")}. See package README.`);
-	warnings.push("External prerequisites: Matt Pocock skills, maplezzk/pi-interactive-subagents, GitHub CLI auth, and a supported mux/terminal.");
 	state.warnings = warnings;
 }
 
-function configuredPlacement(ctx: ExtensionContext): "aboveEditor" | "belowEditor" | undefined {
+function readConfig(ctx: ExtensionContext): DashboardConfig {
 	try {
-		const configPath = path.join(ctx.cwd, CONFIG_DIR_NAME, "mattpocock-workflow", "config.json");
-		const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as { placement?: string };
-		if (config.placement === "aboveEditor" || config.placement === "belowEditor") return config.placement;
-		return undefined;
+		return JSON.parse(fs.readFileSync(configFile(ctx), "utf8")) as DashboardConfig;
 	} catch {
-		return undefined;
+		return {};
 	}
 }
 
+async function writeConfig(ctx: ExtensionContext, config: DashboardConfig): Promise<void> {
+	const file = configFile(ctx);
+	await fs.promises.mkdir(path.dirname(file), { recursive: true });
+	await fs.promises.writeFile(file, JSON.stringify(config, null, 2) + "\n", "utf8");
+}
+
+function configuredPlacement(ctx: ExtensionContext): "aboveEditor" | "belowEditor" | undefined {
+	const config = readConfig(ctx);
+	if (config.placement === "aboveEditor" || config.placement === "belowEditor") return config.placement;
+	return undefined;
+}
+
+function isDashboardEnabled(ctx: ExtensionContext): boolean {
+	return readConfig(ctx).enabled !== false;
+}
+
+async function setDashboardEnabled(ctx: ExtensionContext, enabled: boolean): Promise<void> {
+	await writeConfig(ctx, { ...readConfig(ctx), enabled });
+}
+
+function runLabel(run: WorkflowRun): string {
+	if (run.kind === "wayfinder") return "wayfinder dispatcher";
+	if (run.kind === "implement") return "implementation dispatcher";
+	if (run.kind === "code-review") return "code-review dispatcher";
+	if (run.kind === "2pr" && run.phase === "spec") return "to-spec";
+	if (run.kind === "2pr" && run.phase === "tickets") return "to-tickets";
+	if (run.kind === "2pr" && run.phase === "branch") return "create branch";
+	if (run.kind === "2pr" && run.phase === "pr") return "create PR";
+	if (run.kind === "2pr") return "SPEC-to-PR";
+	return "workflow";
+}
+
+function titleInfo(run: WorkflowRun): string {
+	return `${runLabel(run)} · ${run.scope}`;
+}
+
+function infoText(value: string): string {
+	return `${INFO_TEXT_FG}${value}${RESET_FG}`;
+}
+
+function issueNumberFromScope(scope: string): string | undefined {
+	return scope.match(/#(\d+)$/)?.[1];
+}
+
+async function enrichMissingTitles(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
+	for (const run of state.runs) {
+		const issueNumber = issueNumberFromScope(run.scope);
+		if (!issueNumber || run.title) continue;
+		try {
+			const result = await pi.exec("gh", ["issue", "view", issueNumber, "--json", "title", "--jq", ".title"], { timeout: 5000, signal: ctx.signal });
+			const title = result.stdout.trim();
+			if (title && !run.title) run.title = title;
+		} catch {
+			// Title enrichment is best-effort; keep the scope fallback when gh is unavailable.
+		}
+	}
+}
+
+function displayTitle(run: WorkflowRun): string {
+	return run.title ?? run.scope;
+}
+
+function formatElapsed(run: WorkflowRun): string | undefined {
+	if (!run.startedAt) return undefined;
+	const elapsedSeconds = Math.max(0, Math.floor((Date.now() - Date.parse(run.startedAt)) / 1000));
+	const minutes = Math.floor(elapsedSeconds / 60);
+	const seconds = elapsedSeconds % 60;
+	return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function fitParts(parts: string[], maxWidth: number): string {
+	const remaining = [...parts];
+	while (remaining.length > 1 && visibleWidth(remaining.join(" · ")) > maxWidth) remaining.splice(remaining.length - 2, 1);
+	return remaining.join(" · ");
+}
+
+function appendElapsed(run: WorkflowRun, parts: string[], maxWidth = Number.POSITIVE_INFINITY): string {
+	const elapsed = formatElapsed(run);
+	const allParts = elapsed ? [...parts, elapsed] : parts;
+	return fitParts(allParts, maxWidth);
+}
+
+function statusChips(run: WorkflowRun, maxWidth = Number.POSITIVE_INFINITY): string {
+	const c = run.counts;
+	if (run.kind === "2pr" && run.phase === "spec") return appendElapsed(run, ["MAP complete", "creating SPEC"], maxWidth);
+	if (run.kind === "2pr" && run.phase === "tickets") return appendElapsed(run, [c.tickets ? `${c.tickets} tickets` : "creating tickets", "creating"], maxWidth);
+	if (run.kind === "code-review") return appendElapsed(run, [`iteration ${c.iteration ?? "?"}`, `${c.findings ?? "?"} findings`, `${c.fixes ?? "?"} fixes`], maxWidth);
+	const parts: string[] = [];
+	if (c.total !== undefined) parts.push(`${c.total} sub-issues`);
+	for (const key of ["takeable", "running", "open", "closed", "blocked", "assigned", "failed"]) {
+		const value = c[key];
+		if (Number(value) > 0) parts.push(`${Number(value)} ${key}`);
+	}
+	return parts.length > 0 ? appendElapsed(run, parts, maxWidth) : appendElapsed(run, [run.status], maxWidth);
+}
+
+function compactSummary(run: WorkflowRun): string {
+	return statusChips(run);
+}
+
 function isDashboardActive(): boolean {
-	return state.runs.length > 0;
+	return workflowActiveThisSession && visibleThisSession && state.runs.length > 0;
 }
 
 function borderTop(title: string, info: string, width: number, accent: (value: string) => string): string {
@@ -258,75 +546,179 @@ function borderBottom(width: number, accent: (value: string) => string): string 
 	return accent(`╰${"─".repeat(Math.max(0, width - 2))}╯`);
 }
 
+function stopDashboardTimer(): void {
+	if (!dashboardTimer) return;
+	clearInterval(dashboardTimer);
+	dashboardTimer = undefined;
+}
+
+function startDashboardTimer(requestRender: () => void): void {
+	requestDashboardRender = requestRender;
+	if (dashboardTimer) return;
+	dashboardTimer = setInterval(() => requestDashboardRender?.(), 1000);
+	dashboardTimer.unref?.();
+}
+
+function clearDashboard(ctx: ExtensionContext): void {
+	stopDashboardTimer();
+	dashboardWidgetMounted = false;
+	dashboardWidgetPlacement = undefined;
+	requestDashboardRender = undefined;
+	if (!ctx.hasUI) return;
+	ctx.ui.setWidget(EXTENSION_ID, undefined);
+	ctx.ui.setStatus(EXTENSION_ID, undefined);
+}
+
 function renderDashboard(ctx: ExtensionContext): void {
 	if (!ctx.hasUI) return;
-	if (!isDashboardActive()) {
-		ctx.ui.setWidget(EXTENSION_ID, undefined);
-		ctx.ui.setStatus(EXTENSION_ID, undefined);
+	if (!isDashboardEnabled(ctx) || !isDashboardActive()) {
+		clearDashboard(ctx);
 		return;
 	}
 
 	const placement = configuredPlacement(ctx) ?? "aboveEditor";
-	ctx.ui.setWidget(EXTENSION_ID, (_tui, theme) => ({
-		invalidate() {},
-		render(width: number): string[] {
-			const accent = (value: string) => theme.fg("accent", value);
-			const title = "Matt Pocock Workflow";
-			const active = state.runs[0];
-			const info = active ? `${active.phase ?? active.kind} · ${active.scope}` : "";
-			const lines: string[] = [borderTop(title, info, width, accent)];
+	if (dashboardWidgetMounted && dashboardWidgetPlacement === placement) {
+		requestDashboardRender?.();
+		return;
+	}
 
-			for (const run of state.runs.slice(0, 4)) {
-				const icon = run.status === "failed" ? theme.fg("error", "✗") : run.status === "completed" ? theme.fg("success", "✓") : theme.fg("accent", "●");
-				const phase = run.phase ? ` · ${run.phase}` : "";
-				const left = ` ${icon} ${run.scope}${phase} `;
-				const right = theme.fg("dim", ` ${run.status} `);
-				lines.push(borderLine(left, right, width, accent));
-				for (const event of run.events.slice(0, MAX_EVENTS)) lines.push(borderLine(theme.fg("dim", `   · ${event} `), "", width, accent));
-			}
+	dashboardWidgetMounted = true;
+	dashboardWidgetPlacement = placement;
+	ctx.ui.setWidget(EXTENSION_ID, (tui, theme) => {
+		startDashboardTimer(() => tui.requestRender?.());
+		return {
+			invalidate() {},
+			dispose() {
+				stopDashboardTimer();
+				dashboardWidgetMounted = false;
+				dashboardWidgetPlacement = undefined;
+				requestDashboardRender = undefined;
+			},
+			render(width: number): string[] {
+				const accent = (value: string) => theme.fg("thinkingXhigh", value);
+				const title = "Matt Pocock Workflow";
+				const active = state.runs[0];
+				const info = active ? titleInfo(active) : "";
+				const lines: string[] = [borderTop(title, info, width, accent)];
 
-			for (const warning of state.warnings.slice(0, 2)) lines.push(borderLine(theme.fg("warning", ` ! ${warning} `), "", width, accent));
-			lines.push(borderBottom(width, accent));
-			return lines.map((line) => truncateToWidth(line, width));
-		},
-	}), { placement });
+				for (const run of state.runs.slice(0, 4)) {
+					const left = infoText(` ${displayTitle(run)} `);
+					const maxRightWidth = Math.max(0, width - 4);
+					lines.push(borderLine(left, infoText(` ${statusChips(run, maxRightWidth - 2)} `), width, accent));
+					if (run.alert) lines.push(borderLine(infoText(` ! ${run.alert} `), "", width, accent));
+				}
 
-	const active = state.runs[0];
-	const status = active ? `2PR: ${active.phase ?? active.kind} — ${active.scope}` : undefined;
-	ctx.ui.setStatus(EXTENSION_ID, status ? ctx.ui.theme.fg("accent", status) : undefined);
+				for (const warning of state.warnings.slice(0, 2)) lines.push(borderLine(infoText(` ! ${warning} `), "", width, accent));
+				lines.push(borderBottom(width, accent));
+				return lines.map((line) => truncateToWidth(line, width));
+			},
+		};
+	}, { placement });
+
+	ctx.ui.setStatus(EXTENSION_ID, undefined);
 }
 
 export default function mattpocockWorkflowDashboard(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
+		visibleThisSession = false;
+		workflowActiveThisSession = false;
+		activeRunIdsThisSession = new Set<string>();
 		await loadState(ctx);
-		updateWarnings(ctx);
-		renderDashboard(ctx);
-		await persistState(ctx);
+		clearDashboard(ctx);
+	});
+
+	pi.on("session_shutdown", async () => {
+		stopDashboardTimer();
+	});
+
+	pi.on("before_agent_start", async (event, ctx) => {
+		if (workflowSkillIsActive(event)) {
+			workflowActiveThisSession = true;
+			return;
+		}
+		if (typeof (event as any)?.prompt === "string" && (event as any).prompt.trim()) deactivateWorkflowDashboard(ctx);
+	});
+
+	pi.on("tool_call", async (event) => {
+		if (workflowAgentIsStarting(event)) workflowActiveThisSession = true;
 	});
 
 	pi.on("message_end", async (event, ctx) => {
-		const text = collectTextFromMessage((event as any).message);
-		if (!text || !ingestText(text)) return;
-		updateWarnings(ctx);
-		renderDashboard(ctx);
-		await persistState(ctx);
+		if (!isDashboardEnabled(ctx)) return;
+		const message = (event as any).message;
+		const text = collectTextFromMessage(message);
+		const changed = Boolean(workflowActiveThisSession && text && ingestText(text));
+		if (changed) {
+			markDashboardVisible();
+			await enrichMissingTitles(pi, ctx);
+			updateWarnings(ctx);
+			renderDashboard(ctx);
+			await persistState(ctx);
+		}
+		if (!workflowActiveThisSession || message?.role !== "assistant" || !text) return;
+		const sanitized = sanitizeWorkflowText(text);
+		if (sanitized === text) return;
+		return { message: withTextContentShape(message, sanitized) };
 	});
 
 	pi.on("tool_result", async (event, ctx) => {
+		if (!isDashboardEnabled(ctx) || !workflowActiveThisSession) return;
 		const text = collectTextFromToolResult(event);
 		if (!text || !ingestText(text)) return;
+		markDashboardVisible();
+		await enrichMissingTitles(pi, ctx);
 		updateWarnings(ctx);
 		renderDashboard(ctx);
 		await persistState(ctx);
 	});
 
 	pi.registerCommand("workflow-dashboard", {
-		description: "Show Matt Pocock workflow dashboard status file path and current detected runs.",
+		description: "Show or configure the Matt Pocock workflow dashboard. Usage: /workflow-dashboard [on|off|toggle|status].",
 		handler: async (_args, ctx) => {
+			const command = _args.trim().toLowerCase();
+			if (command === "off" || command === "disable") {
+				await setDashboardEnabled(ctx, false);
+				clearDashboard(ctx);
+				ctx.ui.notify("Workflow dashboard disabled. Re-enable with /workflow-dashboard on.", "info");
+				return;
+			}
+
+			if (command === "on" || command === "enable") {
+				await setDashboardEnabled(ctx, true);
+				workflowActiveThisSession = true;
+				visibleThisSession = state.runs.length > 0;
+				await enrichMissingTitles(pi, ctx);
+				updateWarnings(ctx);
+				renderDashboard(ctx);
+				await persistState(ctx);
+				ctx.ui.notify("Workflow dashboard enabled.", "info");
+				return;
+			}
+
+			if (command === "toggle") {
+				const enabled = !isDashboardEnabled(ctx);
+				await setDashboardEnabled(ctx, enabled);
+				if (enabled) {
+					workflowActiveThisSession = true;
+					visibleThisSession = state.runs.length > 0;
+					await enrichMissingTitles(pi, ctx);
+					updateWarnings(ctx);
+					renderDashboard(ctx);
+					await persistState(ctx);
+					ctx.ui.notify("Workflow dashboard enabled.", "info");
+				} else {
+					clearDashboard(ctx);
+					ctx.ui.notify("Workflow dashboard disabled. Re-enable with /workflow-dashboard on.", "info");
+				}
+				return;
+			}
+
+			await enrichMissingTitles(pi, ctx);
 			updateWarnings(ctx);
 			renderDashboard(ctx);
 			await persistState(ctx);
-			ctx.ui.notify(`Workflow dashboard: ${state.runs.length} run(s). Status file: ${statusFile(ctx)}`, "info");
+			const enabled = isDashboardEnabled(ctx) ? "enabled" : "disabled";
+			ctx.ui.notify(`Workflow dashboard ${enabled}: ${state.runs.length} run(s). Status file: ${statusFile(ctx)}`, "info");
 		},
 	});
 }

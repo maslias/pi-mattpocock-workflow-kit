@@ -8,14 +8,16 @@ It bundles:
 - the local dispatcher/orchestrator/worker agents from `agents/`
 - the local dispatcher/orchestrator skills from `skills/`
 
-The dashboard does **not** start workflows. It watches existing dispatcher/orchestrator output and shows a compact fixed status area.
+The dashboard does **not** start workflows. It watches live dispatcher/orchestrator output in the current Pi session and shows a compact fixed status area only after workflow output is detected.
 
 ## What the dashboard shows
 
 - active `to-pr-orchestrator` / dispatcher progress
+- the current workflow role, e.g. `wayfinder dispatcher`, `to-spec`, `to-tickets`, `implementation dispatcher`, or `code-review dispatcher`
 - SPEC, ticket, branch, implementation, review, and PR phases
-- dispatcher counts such as open, closed, running, failed, blocked, assigned, and not-ready
-- the last 5 detected workflow events
+- a compact one-line row per active run: issue title on the left, count chips on the right
+- compact dispatcher counts such as takeable, running, open, closed, blocked, assigned, and failed
+- an extra warning line when a relevant dispatcher/orchestrator message says the workflow is blocked, failed, waiting for a human decision, or cannot continue
 - multiple runs if more than one is detected
 
 Dashboard text is English.
@@ -25,6 +27,8 @@ Status is persisted in the current project at:
 ```text
 .pi/mattpocock-workflow/status.json
 ```
+
+Persisted status is for diagnostics/history only. It does not make the dashboard appear on Pi startup; the widget activates only after live dispatcher/orchestrator output is detected in the current session.
 
 ## Install
 
@@ -256,7 +260,7 @@ Worker agents are normally spawned by dispatchers, not by humans directly:
 - `to-spec-agent` creates a SPEC from a completed Wayfinder map.
 - `to-tickets-agent` creates implementation tickets from one SPEC.
 
-## Configure dashboard placement
+## Configure dashboard
 
 Default placement is above the editor.
 
@@ -270,6 +274,17 @@ To render below the editor, create:
 ```
 
 Remove the file or use any other value to return to the default above-editor placement.
+
+You can disable or re-enable the dashboard from inside Pi:
+
+```text
+/workflow-dashboard off
+/workflow-dashboard on
+/workflow-dashboard toggle
+/workflow-dashboard status
+```
+
+This persists to `.pi/mattpocock-workflow/config.json` as `"enabled": false` when disabled. While disabled, the extension clears the widget/status and stops ingesting workflow output.
 
 ## Included agents
 
