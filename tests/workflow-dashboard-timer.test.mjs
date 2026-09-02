@@ -6,6 +6,10 @@ const source = fs.readFileSync('extensions/mattpocock-workflow-dashboard/index.t
 assert.match(source, /startedAt\?: string;/, 'workflow runs should store a startedAt timestamp');
 assert.match(source, /let activeRunIdsThisSession = new Set<string>\(\);/, 'run timers should reset per Pi session');
 assert.match(source, /function formatElapsed\(run: WorkflowRun\): string \| undefined/, 'dashboard should format an elapsed timer');
+assert.match(source, /if \(hours > 0\) return `\$\{hours\}h \$\{minutes\}m \$\{seconds\}s`;/, 'hour-long timers should render like 2h 22m 56s');
+assert.match(source, /if \(minutes > 0\) return `\$\{minutes\}m \$\{seconds\}s`;/, 'minute-long timers should render like 1m 19s');
+assert.match(source, /return `\$\{seconds\}s`;/, 'sub-minute timers should render like 19s');
+assert.doesNotMatch(source, /padStart\(2, "0"\)/, 'timer should not use 00:00 formatting');
 assert.match(source, /\[\.\.\.parts, elapsed\]/, 'elapsed timer should be appended to the right-side status chips');
 assert.match(source, /function startDashboardTimer\(requestRender: \(\) => void\): void/, 'dashboard should start a render timer while visible');
 assert.match(source, /function stopDashboardTimer\(\): void/, 'dashboard should stop its render timer when hidden/shutdown');

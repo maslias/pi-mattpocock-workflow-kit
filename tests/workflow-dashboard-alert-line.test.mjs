@@ -10,6 +10,6 @@ assert.match(source, /blocked/i, 'blocked messages should be considered importan
 assert.match(source, /manual gate/i, 'manual gate messages should be considered important');
 assert.match(source, /run\.alert = alert;/, 'ingest should store alert on current run');
 assert.match(source, /if \(run\.alert\) lines\.push/, 'render should show alert as an extra line inside the box');
-assert.match(source, /infoText\(` ! \$\{run\.alert\} `\)/, 'alert line should render inside the white info box');
+assert.match(source, /alertText\(theme, ` ! \$\{run\.alert\} `\)/, 'alert line should render with theme-muted text rather than hardcoded white');
 
 console.log('workflow dashboard alert line policy ok');

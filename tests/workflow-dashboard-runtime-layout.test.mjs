@@ -53,7 +53,7 @@ const component = widgetFactory(tui, theme);
 const lines = component.render(80);
 
 const visibleBodyLine = lines[1].replace(/\x1b\[[0-9;]*m/g, '');
-assert.match(visibleBodyLine, /\d\d:\d\d\s*│$/, 'elapsed timer should remain visible at the far right even in narrow terminals');
+assert.match(visibleBodyLine, /(?:\d+s|\d+m \d+s|\d+h \d+m \d+s)\s*│$/, 'elapsed timer should remain visible at the far right even in narrow terminals');
 assert.doesNotMatch(visibleBodyLine, /0 takeable|0 assigned/, 'zero-value chips should be omitted to preserve room for the timer');
 
 const widgetSetCountAfterMount = widgetSetCount;

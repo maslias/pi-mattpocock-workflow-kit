@@ -204,7 +204,13 @@ function parseTitleLine(line: string): { issue: string; title: string } | null {
 	return { issue: match[1], title: match[2] };
 }
 
+function isStructuredDataLine(line: string): boolean {
+	const trimmed = line.trim();
+	return trimmed.startsWith("[{") || trimmed.startsWith("[") || trimmed.startsWith("{") || trimmed.startsWith("}") || trimmed.startsWith("]") || /^"[^"]+"\s*:/.test(trimmed) || /^-\s*[{[]/.test(trimmed);
+}
+
 function parseAlertLine(line: string): string | null {
+	if (isStructuredDataLine(line)) return null;
 	if (/^No takeable child tickets remain/i.test(line)) return line;
 	if (/manual gate/i.test(line)) return line;
 	if (/\b(blocked|blocking|failed|failure|error|cannot|can't|unable|stopped|dirty working tree)\b/i.test(line)) return line;
@@ -454,6 +460,10 @@ function infoText(value: string): string {
 	return `${INFO_TEXT_FG}${value}${RESET_FG}`;
 }
 
+function alertText(theme: { fg(color: string, text: string): string }, value: string): string {
+	return theme.fg("muted", value);
+}
+
 function issueNumberFromScope(scope: string): string | undefined {
 	return scope.match(/#(\d+)$/)?.[1];
 }
@@ -479,9 +489,12 @@ function displayTitle(run: WorkflowRun): string {
 function formatElapsed(run: WorkflowRun): string | undefined {
 	if (!run.startedAt) return undefined;
 	const elapsedSeconds = Math.max(0, Math.floor((Date.now() - Date.parse(run.startedAt)) / 1000));
-	const minutes = Math.floor(elapsedSeconds / 60);
+	const hours = Math.floor(elapsedSeconds / 3600);
+	const minutes = Math.floor((elapsedSeconds % 3600) / 60);
 	const seconds = elapsedSeconds % 60;
-	return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+	if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+	if (minutes > 0) return `${minutes}m ${seconds}s`;
+	return `${seconds}s`;
 }
 
 function fitParts(parts: string[], maxWidth: number): string {
@@ -605,7 +618,7 @@ function renderDashboard(ctx: ExtensionContext): void {
 					const left = infoText(` ${displayTitle(run)} `);
 					const maxRightWidth = Math.max(0, width - 4);
 					lines.push(borderLine(left, infoText(` ${statusChips(run, maxRightWidth - 2)} `), width, accent));
-					if (run.alert) lines.push(borderLine(infoText(` ! ${run.alert} `), "", width, accent));
+					if (run.alert) lines.push(borderLine(alertText(theme, ` ! ${run.alert} `), "", width, accent));
 				}
 
 				for (const warning of state.warnings.slice(0, 2)) lines.push(borderLine(infoText(` ! ${warning} `), "", width, accent));

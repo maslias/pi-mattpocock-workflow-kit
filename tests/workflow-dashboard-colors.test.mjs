@@ -8,6 +8,8 @@ assert.match(source, /const INFO_TEXT_FG = "\\x1b\[38;2;255;255;255m";/, 'inside
 assert.match(source, /function infoText\(value: string\): string/, 'dashboard should have a dedicated white info text helper');
 assert.match(source, /const left = infoText\(` \$\{displayTitle\(run\)\} `\);/, 'inside title text should use clean white');
 assert.match(source, /infoText\(` \$\{statusChips\(run, maxRightWidth - 2\)\} `\)/, 'inside status text should use clean white');
+assert.match(source, /function alertText\(theme: \{ fg\(color: string, text: string\): string \}, value: string\): string/, 'alert text should use a dedicated themed helper');
+assert.match(source, /theme\.fg\("muted", value\)/, 'alert text should use theme-muted grey instead of hardcoded white');
 assert.doesNotMatch(source, /theme\.fg\("dim", ` \$\{statusChips\(run\)\} `\)/, 'status chips should not be dimmed');
 
 console.log('workflow dashboard color policy ok');
