@@ -12,7 +12,6 @@ Dispatch one Wayfinder map issue to `/skill:wayfinder` worker subagents. The inp
 - Session names include agent name, issue number, and type:
   - AFK worker: `wayfinder-worker #<ticket> <type>`
   - HITL worker: `wayfinder-worker-interactive #<ticket> <type>`
-  - Dispatcher agent, when spawned elsewhere: `wayfinder-dispatcher #<map> map`
 - HITL labels: `wayfinder:prototype`, `wayfinder:grilling`.
 - AFK labels: `wayfinder:research`, `wayfinder:task`.
 - A takeable ticket is open, unblocked, and unassigned. Skip assigned or blocked tickets.

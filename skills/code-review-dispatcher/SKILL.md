@@ -14,7 +14,6 @@ The orchestrator owns workflow coordination only: verify all SPEC sub-issues are
 - Session names include agent name, SPEC, and iteration:
   - `code-review-worker #<spec> iter-<n>`
   - `code-review-fix-worker #<spec> iter-<n>`
-  - Dispatcher agent, when spawned elsewhere: `code-review-dispatcher #<spec>`
 - Default review base is `origin/main`; use a different fixed point only when the dispatcher input explicitly provides one.
 - Stop before review if any SPEC child issue is still open.
 - Stop before spawning if the working tree is dirty.

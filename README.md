@@ -5,8 +5,8 @@ A Pi package for a Matt Pocock-style SPEC-to-PR workflow.
 It bundles:
 
 - a Pi TUI workflow dashboard extension
-- the local dispatcher/orchestrator/worker agents from `agents/`
-- the local dispatcher/orchestrator skills from `skills/`
+- leaf worker agents from `agents/`
+- dispatcher/orchestrator skills from `skills/`
 
 The dashboard does **not** start workflows. It watches live dispatcher/orchestrator output in the current Pi session and shows a compact fixed status area only after workflow output is detected.
 
@@ -50,31 +50,31 @@ For local development from this checkout:
 pi install ./pi-mattpocock-workflow-kit
 ```
 
-The Pi package manifest loads the extension and skills. Pi package manifests do not currently provide a first-class agents resource type, so install the bundled agents separately.
+The Pi package manifest loads the extension and skills. Pi package manifests do not currently provide a first-class agents resource type, so install the bundled leaf agents separately.
 
-## Install bundled agents
+## Install bundled leaf agents
 
 Choose one scope.
 
-### Project-local agents
+### Project-local leaf agents
 
-Use this when you want the workflow agents only in the current project:
+Use this when you want the workflow leaf agents only in the current project:
 
 ```bash
 mkdir -p .pi/agents
 cp -R ./pi-mattpocock-workflow-kit/agents/*.md .pi/agents/
 ```
 
-### Global agents
+### Global leaf agents
 
-Use this when you want the workflow agents available in all Pi projects:
+Use this when you want the workflow leaf agents available in all Pi projects:
 
 ```bash
 mkdir -p ~/.pi/agent/agents
 cp -R ./pi-mattpocock-workflow-kit/agents/*.md ~/.pi/agent/agents/
 ```
 
-The extension warns when required bundled agents are not found in either `.pi/agents` or `~/.pi/agent/agents`.
+The extension warns when required bundled leaf agents are not found in either `.pi/agents` or `~/.pi/agent/agents`.
 
 ## External prerequisites
 
@@ -152,10 +152,10 @@ The dashboard extension may warn about these prerequisites, but it does not inst
 
 This package provides two layers:
 
-1. **Skills** describe the workflow instructions.
-2. **Agents** run those skills in fresh subagent sessions with the right role, tools, and naming conventions.
+1. **Skills** describe workflow/dispatcher instructions.
+2. **Agents** are only for leaf work that does not itself wait on more subagents.
 
-In normal use, prefer the agents. They give the workflow a fresh context and let the interactive subagents extension manage panes, progress, and completion messages.
+In normal use, run orchestrators and dispatchers as **skills in the current/top-level session**. Do not spawn `to-pr-orchestrator` or any `*-dispatcher` as a subagent: those workflows wait on child subagents, and nested subagent sessions can be nudged to finish while they are correctly waiting.
 
 ### Wayfinder dispatcher
 
@@ -172,7 +172,7 @@ It:
 Example prompt:
 
 ```text
-Run wayfinder-dispatcher for map #123.
+Run /skill:wayfinder-dispatcher for map #123.
 ```
 
 ### Implementation dispatcher
@@ -192,7 +192,7 @@ It does **not** run final code review and does **not** close the SPEC.
 Example prompt:
 
 ```text
-Run implement-dispatcher for SPEC #123.
+Run /skill:implement-dispatcher for SPEC #123.
 ```
 
 ### Code-review dispatcher
@@ -210,7 +210,7 @@ It:
 Example prompt:
 
 ```text
-Run code-review-dispatcher for SPEC #123 against origin/main.
+Run /skill:code-review-dispatcher for SPEC #123 against origin/main.
 ```
 
 When used inside `to-pr-orchestrator`, it is instructed not to close the SPEC because the orchestrator owns final PR/SPEC closure.
@@ -239,14 +239,10 @@ It coordinates the whole workflow:
 Example prompt:
 
 ```text
-Run to-pr-orchestrator for #123.
+Run /skill:to-pr-orchestrator for #123.
 ```
 
-Or, if you are calling the subagent tool directly:
-
-```text
-Spawn agent `to-pr-orchestrator` for issue #123.
-```
+Do **not** call the subagent tool with `agent: "to-pr-orchestrator"`. The dashboard extension blocks nested orchestrator/dispatcher agents and tells the caller to run the matching skill inline.
 
 ### Worker agents
 
@@ -288,10 +284,8 @@ This persists to `.pi/mattpocock-workflow/config.json` as `"enabled": false` whe
 
 ## Included agents
 
-- `to-pr-orchestrator`
-- `implement-dispatcher`
-- `code-review-dispatcher`
-- `wayfinder-dispatcher`
+Leaf agents only:
+
 - `implement-worker`
 - `code-review-worker`
 - `code-review-fix-worker`

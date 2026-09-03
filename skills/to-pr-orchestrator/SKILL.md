@@ -6,17 +6,19 @@ disable-model-invocation: true
 
 Orchestrate one GitHub issue to a pull request. The input is either a completed `wayfinder:map` issue or an existing SPEC/tracking issue.
 
-The orchestrator owns workflow coordination only. It does not plan, implement, or review directly. It validates the source issue, spawns fresh-context agents for spec/ticket creation and the existing dispatchers, creates the integration branch, opens the pull request, comments on the SPEC, closes the SPEC, and reports compact phase summaries.
+The orchestrator owns workflow coordination only. It does not plan, implement, or review directly. It validates the source issue, spawns fresh-context leaf agents for spec/ticket creation, runs dispatcher skills inline in the current session, creates the integration branch, opens the pull request, comments on the SPEC, closes the SPEC, and reports compact phase summaries.
 
 ## Workflow rules
 
-- Spawn every worker/dispatcher agent with fresh context: every `subagent` call sets `fork: false`.
-- Never poll subagent logs. After spawning one phase, wait for the harness-delivered subagent result.
+- Run this orchestrator as a top-level skill, not as a subagent. It later waits on worker subagents through dispatcher skills; nested orchestrator/dispatcher subagents can be killed by `subagent_done` nudges while waiting.
+- Spawn only leaf/non-nesting agents with fresh context: every `subagent` call sets `fork: false`.
+- Do not spawn `to-pr-orchestrator`, `implement-dispatcher`, `code-review-dispatcher`, or `wayfinder-dispatcher` as subagents. Run their skills inline in the current session.
+- Never poll subagent logs. After spawning one leaf phase, wait for the harness-delivered subagent result.
 - Wayfinder work is out of scope. If a Wayfinder map still has open child issues, stop and report them; do not start `wayfinder-dispatcher`.
 - `to-spec-agent` and `to-tickets-agent` are allowed to accept their own recommended seams, ticket breakdowns, and blocking edges without waiting for human confirmation.
 - The implementation branch is `implement/issue-<spec>-<slug-from-spec-title>`.
-- Run `implement-dispatcher` from the implementation branch.
-- Run `code-review-dispatcher` from the implementation branch with explicit instruction not to close the SPEC.
+- Run `/skill:implement-dispatcher` inline from the implementation branch.
+- Run `/skill:code-review-dispatcher` inline from the implementation branch with explicit instruction not to close the SPEC.
 - The review base defaults to `origin/main` unless the input explicitly provides a different fixed point.
 - Create the PR only after implementation and final review succeed with a clean working tree.
 - PR title: `Implement #<spec>: <SPEC title>`.
@@ -63,23 +65,13 @@ The orchestrator owns workflow coordination only. It does not plan, implement, o
 8. **Create the implementation branch.** Slugify the SPEC title: lowercase, replace non-alphanumeric runs with `-`, trim leading/trailing `-`, and keep it short enough for a readable branch name. Create `implement/issue-<spec>-<slug>`. Stop if the branch already exists unless it points at the current `HEAD` and the working tree is clean. Check it out. Publish:
    - `BRANCH: implement/issue-<spec>-<slug> created from <fixed-point-or-current-head>.`
 
-9. **Run implementation.** Spawn:
-   - `name`: `implement-dispatcher #<spec>`
-   - `agent`: `implement-dispatcher`
-   - `interactive`: `false`
-   - `fork`: `false`
-   - `task`: `Run /skill:implement-dispatcher for SPEC #<spec> (<url>) from the current implementation branch. Implement all takeable ready-for-agent sub-issues, merge successful worker branches back into this branch, and end with the dispatcher's compact final snapshot. Do not run final code review and do not close SPEC #<spec>.`
+9. **Run implementation inline.** Invoke `/skill:implement-dispatcher` in this same top-level session for SPEC #<spec> (<url>) from the current implementation branch. Implement all takeable ready-for-agent sub-issues, merge successful worker branches back into this branch, and end with the dispatcher's compact final snapshot. Do not run final code review and do not close SPEC #<spec>.
 
-   When the result arrives, reload the SPEC children. Stop if any implementation sub-issue remains open and report them grouped by reason if possible. Stop if `git status --short` is dirty.
+   After the dispatcher skill completes, reload the SPEC children. Stop if any implementation sub-issue remains open and report them grouped by reason if possible. Stop if `git status --short` is dirty.
 
-10. **Run final review without SPEC closure.** Spawn:
-    - `name`: `code-review-dispatcher #<spec>`
-    - `agent`: `code-review-dispatcher`
-    - `interactive`: `false`
-    - `fork`: `false`
-    - `task`: `Run /skill:code-review-dispatcher for SPEC #<spec> (<url>) against <fixed-point>. Review/fix until there are no relevant findings. Do not close SPEC #<spec>; leave final SPEC comment/closure to to-pr-orchestrator. End with the dispatcher's compact final snapshot.`
+10. **Run final review inline without SPEC closure.** Invoke `/skill:code-review-dispatcher` in this same top-level session for SPEC #<spec> (<url>) against <fixed-point>. Review/fix until there are no relevant findings. Do not close SPEC #<spec>; leave final SPEC comment/closure to to-pr-orchestrator. End with the dispatcher's compact final snapshot.
 
-    When the result arrives, stop if the result reports a manual gate, failure, dirty working tree, unresolved findings, or missing clean final review. Stop if `git status --short` is dirty.
+    After the dispatcher skill completes, stop if the result reports a manual gate, failure, dirty working tree, unresolved findings, or missing clean final review. Stop if `git status --short` is dirty.
 
 11. **Push the branch.** Run `git push -u origin <branch>`. Stop on failure.
 

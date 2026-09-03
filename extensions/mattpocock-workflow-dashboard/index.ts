@@ -38,16 +38,13 @@ const INFO_TEXT_FG = "\x1b[38;2;255;255;255m";
 const RESET_FG = "\x1b[39m";
 const MAX_EVENTS = 3;
 const WORKFLOW_ENTRYPOINT_NAMES = new Set(["wayfinder-dispatcher", "implement-dispatcher", "code-review-dispatcher", "to-pr-orchestrator"]);
+const DISALLOWED_NESTED_WORKFLOW_AGENTS = new Set(["wayfinder-dispatcher", "implement-dispatcher", "code-review-dispatcher", "to-pr-orchestrator"]);
 const REQUIRED_AGENTS = [
-	"code-review-dispatcher",
 	"code-review-fix-worker",
 	"code-review-worker",
-	"implement-dispatcher",
 	"implement-worker",
-	"to-pr-orchestrator",
 	"to-spec-agent",
 	"to-tickets-agent",
-	"wayfinder-dispatcher",
 	"wayfinder-worker",
 	"wayfinder-worker-interactive",
 ];
@@ -137,6 +134,18 @@ function workflowSkillIsActive(event: any): boolean {
 function workflowAgentIsStarting(event: any): boolean {
 	if (event?.toolName !== "subagent") return false;
 	return hasWorkflowEntrypointName(event?.input?.agent) || hasWorkflowEntrypointName(event?.input?.name);
+}
+
+function disallowedNestedWorkflowAgent(event: any): string | null {
+	if (event?.toolName !== "subagent") return null;
+	const agent = typeof event?.input?.agent === "string" ? event.input.agent : "";
+	const name = typeof event?.input?.name === "string" ? event.input.name : "";
+	const directMatch = [agent, name].find((value) => DISALLOWED_NESTED_WORKFLOW_AGENTS.has(value));
+	if (directMatch) return directMatch;
+	if (agent.endsWith("-dispatcher")) return agent;
+	const nameDispatcher = name.match(/\b([A-Za-z0-9-]+-dispatcher)\b/)?.[1];
+	if (nameDispatcher) return nameDispatcher;
+	return [...DISALLOWED_NESTED_WORKFLOW_AGENTS].find((value) => name.includes(value)) ?? null;
 }
 
 function deactivateWorkflowDashboard(ctx: ExtensionContext): void {
@@ -653,6 +662,14 @@ export default function mattpocockWorkflowDashboard(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_call", async (event) => {
+		const blockedAgent = disallowedNestedWorkflowAgent(event);
+		if (blockedAgent) {
+			workflowActiveThisSession = true;
+			return {
+				block: true,
+				reason: `Do not spawn ${blockedAgent} as a subagent. Run /skill:${blockedAgent} inline in the current/top-level session instead; dispatcher/orchestrator agents spawn child subagents and can be killed by subagent_done nudges while waiting.`,
+			};
+		}
 		if (workflowAgentIsStarting(event)) workflowActiveThisSession = true;
 	});
 
