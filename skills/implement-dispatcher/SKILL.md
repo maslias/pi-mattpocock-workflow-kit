@@ -16,6 +16,7 @@ The dispatcher owns orchestration only: find takeable sub-issues, create isolate
 - A blocked ticket has a blocker label (`blocked`, `blocked:*`, `blocked-by:*`, `depends-on:*`, or another project blocker label), or native dependency metadata/fallback body text showing open blockers.
 - Skip closed, assigned, blocked, and not-ready tickets. Re-check them after every successful merge because labels/blockers may change.
 - Create one git worktree and one branch per spawned ticket under `.agent-tmp/implement-dispatcher/worktrees/spec-<spec>/issue-<ticket>/`. Workers never share a working tree.
+- Resolve the worker worktree path from the repository root captured in step 2. Never create sibling worktrees next to the repo or in `$HOME` (for example, never use `../<repo>-issue-<ticket>` or `~/<repo>-issue-<ticket>`).
 - Merge each completed worker branch into the original implementation branch before spawning tickets that were previously blocked by it.
 - Do not run an extra code review or close the SPEC issue. That belongs to a later review/closure dispatcher.
 - Do not run extra dispatcher-level tests. `/skill:implement` runs TDD/tests and commits.
@@ -26,7 +27,7 @@ The dispatcher owns orchestration only: find takeable sub-issues, create isolate
 
 1. **Normalize the SPEC id.** Accept a bare number, `#<number>`, or GitHub issue URL. Extract the issue number and repository owner/name. If the URL omits nothing, use that repo; otherwise use the current `gh repo view --json nameWithOwner` repo.
 
-2. **Record the integration branch.** Capture `git branch --show-current`, repository root, and `git status --short`. If the working tree is dirty, stop and ask the human to start from a clean manually-created implementation branch. If `.agent-tmp/` is not ignored by git, warn the human in the running summary; do not edit `.gitignore` automatically.
+2. **Record the integration branch.** Capture `git branch --show-current`, repository root with `git rev-parse --show-toplevel`, and `git status --short`. If the working tree is dirty, stop and ask the human to start from a clean manually-created implementation branch. If `.agent-tmp/` is not ignored by git, warn the human in the running summary; do not edit `.gitignore` automatically. Treat all `.agent-tmp/...` paths below as relative to this repository root, not relative to the shell's process cwd and never relative to `$HOME`.
 
 3. **Load the SPEC.** Run `gh issue view <spec> --repo <owner/repo> --json number,title,state,labels,body,url`. Stop if the SPEC is closed or cannot be read.
 
@@ -46,7 +47,7 @@ The dispatcher owns orchestration only: find takeable sub-issues, create isolate
 
 6. **Spawn one wave.** For every currently takeable ticket that has not already been spawned:
    - Create branch `implement/spec-<spec>/issue-<ticket>` from the integration branch.
-   - Create worktree `.agent-tmp/implement-dispatcher/worktrees/spec-<spec>/issue-<ticket>/` for that branch.
+   - Create worktree `.agent-tmp/implement-dispatcher/worktrees/spec-<spec>/issue-<ticket>/` for that branch, with the command shape `git worktree add .agent-tmp/implement-dispatcher/worktrees/spec-<spec>/issue-<ticket> <branch>` run from the repository root. If using an absolute path for tool `cwd`, construct it as `<repo-root>/.agent-tmp/implement-dispatcher/worktrees/spec-<spec>/issue-<ticket>`. Before spawning, verify `git worktree list --porcelain` shows that exact in-repo path. If it does not, remove the mistaken worktree and stop rather than spawning a worker in the wrong place.
    - Call `subagent` with:
      - `name`: `implement-worker #<ticket>`
      - `agent`: `implement-worker`
@@ -60,7 +61,7 @@ The dispatcher owns orchestration only: find takeable sub-issues, create isolate
    - If the worker reports failure, has no implementation commit, or left the worktree dirty, mark the ticket failed and continue integrating other successful workers.
    - On the integration branch, merge the worker branch with `git merge --no-ff <branch>`.
    - If merge conflicts occur, run `/skill:resolving-merge-conflicts` immediately and use it to resolve the in-progress merge. After resolving, continue the merge/commit and then continue dispatcher integration. If the conflict-resolution skill cannot resolve the merge safely, stop with the conflict details and the remaining ticket states. Do not spawn more workers until the merge conflict is resolved.
-   - After a successful merge, remove the worker worktree if safe. If `.agent-tmp/implement-dispatcher/worktrees/spec-<spec>/` and its parent workflow temp directories become empty, remove those empty directories too.
+   - After a successful merge, remove the worker worktree with `git worktree remove .agent-tmp/implement-dispatcher/worktrees/spec-<spec>/issue-<ticket>` from the repository root. If removal reports a cleanup failure, stop and report the exact path, branch, and `git status --short` for that worktree instead of silently continuing. If `.agent-tmp/implement-dispatcher/worktrees/spec-<spec>/` and its parent workflow temp directories become empty, remove those empty directories too.
 
 8. **Publish a running summary.** After every classification, spawn wave, and merge batch, report one compact line plus changed tickets only:
    - `SPEC #<spec>: <closed>/<total> closed, <open> open, <merged> merged this run, <running> running, <takeable> takeable, <blocked> blocked, <assigned> assigned, <not-ready> not-ready, <failed> failed.`
@@ -80,4 +81,4 @@ The dispatcher owns orchestration only: find takeable sub-issues, create isolate
    - Current branch and merge status.
    - Worktree cleanup status.
 
-Completion criterion: every currently takeable `ready-for-agent` sub-issue has been spawned exactly once, every successful worker branch has been merged into the original implementation branch, successful worker worktrees under `.agent-tmp/implement-dispatcher/worktrees/spec-<spec>/` have been removed, empty workflow temp directories have been cleaned up when safe, the running summary is current, no dispatcher-level tests/review/SPEC closure were performed, and remaining open tickets are accounted for by blocked/assigned/not-ready/failed status.
+Completion criterion: every currently takeable `ready-for-agent` sub-issue has been spawned exactly once, every successful worker branch has been merged into the original implementation branch, successful worker worktrees under `.agent-tmp/implement-dispatcher/worktrees/spec-<spec>/` have been removed, no successful worker worktree exists outside the repository root, empty workflow temp directories have been cleaned up when safe, the running summary is current, no dispatcher-level tests/review/SPEC closure were performed, and remaining open tickets are accounted for by blocked/assigned/not-ready/failed status.
