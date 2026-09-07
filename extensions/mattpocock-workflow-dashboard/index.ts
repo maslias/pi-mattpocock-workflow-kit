@@ -136,6 +136,31 @@ function workflowAgentIsStarting(event: any): boolean {
 	return hasWorkflowEntrypointName(event?.input?.agent) || hasWorkflowEntrypointName(event?.input?.name);
 }
 
+function codeReviewWorkerStart(event: any): { spec: string; iteration?: number; worker: "review" | "fix" } | null {
+	if (event?.toolName !== "subagent") return null;
+	const agent = typeof event?.input?.agent === "string" ? event.input.agent : "";
+	const name = typeof event?.input?.name === "string" ? event.input.name : "";
+	const worker = agent === "code-review-fix-worker" || /\bcode-review-fix-worker\b/.test(name) ? "fix" : agent === "code-review-worker" || /\bcode-review-worker\b/.test(name) ? "review" : null;
+	if (!worker) return null;
+	const spec = name.match(/#(\d+)\b/)?.[1] ?? String(event?.input?.task ?? "").match(/SPEC #(\d+)\b/i)?.[1];
+	if (!spec) return null;
+	const iterationText = name.match(/\biter-(\d+)\b/)?.[1] ?? String(event?.input?.task ?? "").match(/iteration-(\d+)\.md\b/)?.[1];
+	return { spec, iteration: iterationText ? Number(iterationText) : undefined, worker };
+}
+
+function markCodeReviewWorkerRunStarted(event: any): boolean {
+	const start = codeReviewWorkerStart(event);
+	if (!start) return false;
+	const run = findRun(`review-${start.spec}`, "code-review", `SPEC #${start.spec}`);
+	if (start.iteration !== undefined && run.counts.iteration === undefined) run.counts.iteration = start.iteration;
+	if (run.counts.findings === undefined) run.counts.findings = "?";
+	if (run.counts.fixes === undefined) run.counts.fixes = "?";
+	run.status = "running";
+	run.summary = `SPEC #${start.spec}: ${start.worker === "fix" ? "fix" : "review"} worker started${start.iteration !== undefined ? ` for iteration ${start.iteration}` : ""}.`;
+	addEvent(run, run.summary);
+	return true;
+}
+
 function disallowedNestedWorkflowAgent(event: any): string | null {
 	if (event?.toolName !== "subagent") return null;
 	const agent = typeof event?.input?.agent === "string" ? event.input.agent : "";
@@ -661,7 +686,7 @@ export default function mattpocockWorkflowDashboard(pi: ExtensionAPI): void {
 		if (typeof (event as any)?.prompt === "string" && (event as any).prompt.trim()) deactivateWorkflowDashboard(ctx);
 	});
 
-	pi.on("tool_call", async (event) => {
+	pi.on("tool_call", async (event, ctx) => {
 		const blockedAgent = disallowedNestedWorkflowAgent(event);
 		if (blockedAgent) {
 			workflowActiveThisSession = true;
@@ -671,6 +696,13 @@ export default function mattpocockWorkflowDashboard(pi: ExtensionAPI): void {
 			};
 		}
 		if (workflowAgentIsStarting(event)) workflowActiveThisSession = true;
+		if (!isDashboardEnabled(ctx) || !markCodeReviewWorkerRunStarted(event)) return;
+		workflowActiveThisSession = true;
+		markDashboardVisible();
+		await enrichMissingTitles(pi, ctx);
+		updateWarnings(ctx);
+		renderDashboard(ctx);
+		await persistState(ctx);
 	});
 
 	pi.on("message_end", async (event, ctx) => {

@@ -19,8 +19,9 @@ const beforeAgentStartHook = source.match(/pi\.on\("before_agent_start", async \
 assert.match(beforeAgentStartHook, /workflowSkillIsActive\(event\)/, 'workflow skills should activate the dashboard');
 assert.match(beforeAgentStartHook, /deactivateWorkflowDashboard\(ctx\)/, 'non-workflow turns should clear the dashboard');
 
-const toolCallHook = source.match(/pi\.on\("tool_call", async \(event\) => \{[\s\S]*?\n\t\}\);/)?.[0] ?? '';
+const toolCallHook = source.match(/pi\.on\("tool_call", async \(event, ctx\) => \{[\s\S]*?\n\t\}\);/)?.[0] ?? '';
 assert.match(toolCallHook, /workflowAgentIsStarting\(event\)/, 'workflow subagents should activate the dashboard');
+assert.match(toolCallHook, /markCodeReviewWorkerRunStarted\(event\)/, 'code-review worker spawns should immediately create a visible dispatcher run');
 
 const messageHook = source.match(/pi\.on\("message_end", async \(event, ctx\) => \{[\s\S]*?\n\t\}\);/)?.[0] ?? '';
 assert.match(messageHook, /workflowActiveThisSession && text && ingestText\(text\)/, 'assistant workflow output should only activate visibility after a workflow entrypoint');
